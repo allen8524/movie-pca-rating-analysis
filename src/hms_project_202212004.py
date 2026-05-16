@@ -10,9 +10,13 @@ import re
 import sys
 import warnings
 
+import matplotlib
 import numpy as np
 import pandas as pd
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
@@ -26,6 +30,10 @@ except Exception:
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_PATH = BASE_DIR / "data" / "hms202212004.csv"
 OUTPUT_DIR = BASE_DIR / "outputs"
+IMAGE_DIR = BASE_DIR / "docs" / "images"
+SUMMARY_PATH = OUTPUT_DIR / "analysis_summary.txt"
+
+NUMERIC_COLUMNS = ["runtime_min", "audience_total", "cine21_score_detail", "netizen_score"]
 
 warnings.filterwarnings("ignore")
 
@@ -68,7 +76,7 @@ def preprocess_missing_values(df: pd.DataFrame) -> pd.DataFrame:
 def remove_outliers(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    for column in ["runtime_min", "audience_total", "cine21_score_detail", "netizen_score"]:
+    for column in NUMERIC_COLUMNS:
         if column not in df.columns:
             continue
 
@@ -100,11 +108,7 @@ def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    numeric_columns = [
-        column
-        for column in ["runtime_min", "audience_total", "cine21_score_detail", "netizen_score"]
-        if column in df.columns
-    ]
+    numeric_columns = [column for column in NUMERIC_COLUMNS if column in df.columns]
 
     if not numeric_columns:
         print("정규화할 수치형 컬럼이 없습니다. 정규화 단계를 건너뜁니다.")
@@ -120,22 +124,18 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run_pca(df_scaled: pd.DataFrame) -> pd.DataFrame:
-    feature_columns = [
-        column
-        for column in ["runtime_min", "audience_total", "cine21_score_detail", "netizen_score"]
-        if column in df_scaled.columns
-    ]
+def run_pca(df_scaled: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
+    feature_columns = [column for column in NUMERIC_COLUMNS if column in df_scaled.columns]
 
     if not feature_columns:
         print("PCA에 필요한 수치형 컬럼이 없습니다. PCA 단계를 건너뜁니다.")
-        return pd.DataFrame()
+        return pd.DataFrame(), np.array([])
 
     pca_data = df_scaled[feature_columns].apply(pd.to_numeric, errors="coerce")
     pca_data = pca_data.replace([np.inf, -np.inf], np.nan).dropna()
     if len(pca_data) < 2:
         print("PCA에 필요한 데이터가 부족합니다. PCA 단계를 건너뜁니다.")
-        return pd.DataFrame()
+        return pd.DataFrame(), np.array([])
 
     n_components = min(len(feature_columns), len(pca_data))
     pca = PCA(n_components=n_components)
@@ -148,48 +148,52 @@ def run_pca(df_scaled: pd.DataFrame) -> pd.DataFrame:
     if "title" in df_scaled.columns:
         df_pca["title"] = df_scaled.loc[pca_data.index, "title"].values
 
-    print("PCA 설명분산비:", np.round(pca.explained_variance_ratio_, 4).tolist())
-    return df_pca
+    explained_variance_ratio = pca.explained_variance_ratio_
+    print("PCA Explained Variance Ratio:")
+    for component, ratio in zip(component_columns, explained_variance_ratio):
+        print(f"{component}: {ratio:.6f}")
+
+    return df_pca, explained_variance_ratio
 
 
-def analyze_correlation(df_scaled: pd.DataFrame) -> None:
-    columns = [
-        column
-        for column in ["runtime_min", "audience_total", "cine21_score_detail", "netizen_score"]
-        if column in df_scaled.columns
-    ]
+def analyze_correlation(df_scaled: pd.DataFrame) -> pd.DataFrame:
+    columns = [column for column in NUMERIC_COLUMNS if column in df_scaled.columns]
 
     if len(columns) < 2:
         print("상관분석에 필요한 컬럼이 부족합니다. 상관분석을 건너뜁니다.")
-        return
+        return pd.DataFrame()
 
     correlation_data = df_scaled[columns].apply(pd.to_numeric, errors="coerce")
     correlation_data = correlation_data.replace([np.inf, -np.inf], np.nan).dropna()
     if len(correlation_data) < 2:
         print("상관분석에 필요한 데이터가 부족합니다. 상관분석을 건너뜁니다.")
-        return
+        return pd.DataFrame()
 
+    pearson_corr = correlation_data.corr(method="pearson")
     print("=== Pearson ===")
-    print(correlation_data.corr(method="pearson"))
+    print(pearson_corr)
     print("\n=== Spearman ===")
     print(correlation_data.corr(method="spearman"))
     print("\n=== Kendall ===")
     print(correlation_data.corr(method="kendall"))
 
+    return pearson_corr
 
-def run_arima_forecast(df_clean: pd.DataFrame) -> None:
+
+def run_arima_forecast(df_clean: pd.DataFrame) -> dict:
+    def skip(reason: str) -> dict:
+        print(reason)
+        return {"forecast": None, "skipped": reason}
+
     if ARIMA is None:
-        print("statsmodels ARIMA를 불러올 수 없습니다. ARIMA 단계를 건너뜁니다.")
-        return
+        return skip("statsmodels ARIMA를 불러올 수 없습니다. ARIMA 단계를 건너뜁니다.")
 
     if "open_date_detail" not in df_clean.columns:
-        print("개봉일 컬럼이 없어 ARIMA 단계를 건너뜁니다.")
-        return
+        return skip("개봉일 컬럼이 없어 ARIMA 단계를 건너뜁니다.")
 
     rating_column = "cine21_score_detail"
     if rating_column not in df_clean.columns:
-        print("평점 컬럼이 없어 ARIMA 단계를 건너뜁니다.")
-        return
+        return skip("평점 컬럼이 없어 ARIMA 단계를 건너뜁니다.")
 
     date_pattern = re.compile(r"(\d{4}[./-]\d{1,2}[./-]\d{1,2})")
     df = df_clean.copy()
@@ -200,8 +204,7 @@ def run_arima_forecast(df_clean: pd.DataFrame) -> None:
     df = df.dropna(subset=["open_date", rating_column])
 
     if len(df) < 6:
-        print("ARIMA에 필요한 관측치가 부족합니다. ARIMA 단계를 건너뜁니다.")
-        return
+        return skip("ARIMA에 필요한 관측치가 부족합니다. ARIMA 단계를 건너뜁니다.")
 
     month_end_freq = "ME"
     try:
@@ -218,38 +221,38 @@ def run_arima_forecast(df_clean: pd.DataFrame) -> None:
     )
 
     if len(monthly_rating) < 6:
-        print("월별 평점 데이터가 부족합니다. ARIMA 단계를 건너뜁니다.")
-        return
+        return skip("월별 평점 데이터가 부족합니다. ARIMA 단계를 건너뜁니다.")
 
     monthly_rating = monthly_rating.asfreq(month_end_freq).interpolate()
 
     try:
         model = ARIMA(monthly_rating, order=(1, 1, 1))
         fitted_model = model.fit()
-        forecast = fitted_model.get_forecast(steps=1).predicted_mean
+        forecast = float(fitted_model.get_forecast(steps=1).predicted_mean.iloc[0])
     except Exception as exc:
-        print(f"ARIMA 실행 중 오류가 발생했습니다. ARIMA 단계를 건너뜁니다: {exc}")
-        return
+        return skip(f"ARIMA 실행 중 오류가 발생했습니다. ARIMA 단계를 건너뜁니다: {exc}")
 
     print("최근 5개월 평균 평점")
     print(monthly_rating.tail())
-    print("다음 달 예상 평균 평점:", float(forecast.iloc[0]))
+    print(f"ARIMA Forecast: {forecast:.6f}")
+    return {"forecast": forecast, "skipped": None}
 
 
-def run_linear_regression(df_scaled: pd.DataFrame, df_pca: pd.DataFrame) -> None:
+def run_linear_regression(df_scaled: pd.DataFrame, df_pca: pd.DataFrame) -> dict:
+    def skip(reason: str) -> dict:
+        print(reason)
+        return {"r2": None, "mse": None, "y_actual": None, "y_pred": None, "skipped": reason}
+
     if df_pca.empty or "PC1" not in df_pca.columns:
-        print("PC1 데이터가 없어 회귀분석을 건너뜁니다.")
-        return
+        return skip("PC1 데이터가 없어 회귀분석을 건너뜁니다.")
 
     target_column = "cine21_score_detail"
     if target_column not in df_scaled.columns:
-        print("평점 컬럼이 없어 회귀분석을 건너뜁니다.")
-        return
+        return skip("평점 컬럼이 없어 회귀분석을 건너뜁니다.")
 
     common_index = df_pca.index.intersection(df_scaled.index)
     if len(common_index) < 2:
-        print("회귀분석에 필요한 데이터가 부족합니다. 회귀분석을 건너뜁니다.")
-        return
+        return skip("회귀분석에 필요한 데이터가 부족합니다. 회귀분석을 건너뜁니다.")
 
     regression_data = pd.DataFrame(
         {
@@ -260,24 +263,149 @@ def run_linear_regression(df_scaled: pd.DataFrame, df_pca: pd.DataFrame) -> None
     regression_data = regression_data.replace([np.inf, -np.inf], np.nan).dropna()
 
     if len(regression_data) < 2 or regression_data["PC1"].nunique() < 2:
-        print("회귀분석에 필요한 유효한 데이터가 부족합니다. 회귀분석을 건너뜁니다.")
-        return
+        return skip("회귀분석에 필요한 유효한 데이터가 부족합니다. 회귀분석을 건너뜁니다.")
 
     x = regression_data[["PC1"]].values
-    y = regression_data[target_column].values
+    y_actual = regression_data[target_column].values
 
     model = LinearRegression()
-    model.fit(x, y)
+    model.fit(x, y_actual)
     y_pred = model.predict(x)
+    r2 = float(r2_score(y_actual, y_pred))
+    mse = float(mean_squared_error(y_actual, y_pred))
 
     print("회귀계수(기울기):", float(model.coef_[0]))
     print("절편:", float(model.intercept_))
-    print("결정계수 R^2:", float(r2_score(y, y_pred)))
-    print("평균제곱오차 MSE:", float(mean_squared_error(y, y_pred)))
+    print(f"Linear Regression R2: {r2:.6f}")
+    print(f"Linear Regression MSE: {mse:.6f}")
+
+    return {"r2": r2, "mse": mse, "y_actual": y_actual, "y_pred": y_pred, "skipped": None}
+
+
+def plot_pca_explained_variance(explained_variance_ratio: np.ndarray) -> None:
+    if len(explained_variance_ratio) == 0:
+        print("PCA 설명분산비 이미지 생성을 건너뜁니다.")
+        return
+
+    output_path = IMAGE_DIR / "pca_explained_variance.png"
+    try:
+        components = [f"PC{i + 1}" for i in range(len(explained_variance_ratio))]
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.bar(components, explained_variance_ratio)
+        ax.set_title("PCA Explained Variance Ratio")
+        ax.set_xlabel("Principal Component")
+        ax.set_ylabel("Explained Variance Ratio")
+        ax.set_ylim(0, max(1.0, float(np.max(explained_variance_ratio)) * 1.15))
+        for index, ratio in enumerate(explained_variance_ratio):
+            ax.text(index, ratio, f"{ratio:.3f}", ha="center", va="bottom")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print("PCA 설명분산비 이미지 저장:", output_path)
+    except Exception as exc:
+        print(f"PCA 설명분산비 이미지 저장 실패, 분석은 계속합니다: {exc}")
+        plt.close("all")
+
+
+def plot_correlation_heatmap(correlation_matrix: pd.DataFrame) -> None:
+    if correlation_matrix.empty:
+        print("상관관계 히트맵 이미지 생성을 건너뜁니다.")
+        return
+
+    output_path = IMAGE_DIR / "correlation_heatmap.png"
+    try:
+        labels = correlation_matrix.columns.tolist()
+        fig, ax = plt.subplots(figsize=(7, 6))
+        image = ax.imshow(correlation_matrix.values, vmin=-1, vmax=1)
+        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_xticks(range(len(labels)), labels=labels, rotation=45, ha="right")
+        ax.set_yticks(range(len(labels)), labels=labels)
+        ax.set_title("Pearson Correlation Heatmap")
+
+        for row_index in range(len(labels)):
+            for col_index in range(len(labels)):
+                value = correlation_matrix.iloc[row_index, col_index]
+                ax.text(col_index, row_index, f"{value:.2f}", ha="center", va="center")
+
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print("상관관계 히트맵 이미지 저장:", output_path)
+    except Exception as exc:
+        print(f"상관관계 히트맵 이미지 저장 실패, 분석은 계속합니다: {exc}")
+        plt.close("all")
+
+
+def plot_actual_vs_predicted(regression_result: dict) -> None:
+    y_actual = regression_result.get("y_actual")
+    y_pred = regression_result.get("y_pred")
+    if y_actual is None or y_pred is None:
+        print("실제 평점 vs 예측 평점 이미지 생성을 건너뜁니다.")
+        return
+
+    output_path = IMAGE_DIR / "actual_vs_predicted.png"
+    try:
+        y_actual = np.asarray(y_actual, dtype=float)
+        y_pred = np.asarray(y_pred, dtype=float)
+        valid_mask = np.isfinite(y_actual) & np.isfinite(y_pred)
+        y_actual = y_actual[valid_mask]
+        y_pred = y_pred[valid_mask]
+        if len(y_actual) < 2:
+            print("실제 평점 vs 예측 평점 이미지에 필요한 데이터가 부족합니다.")
+            return
+
+        min_value = float(min(np.min(y_actual), np.min(y_pred)))
+        max_value = float(max(np.max(y_actual), np.max(y_pred)))
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.scatter(y_actual, y_pred, alpha=0.65)
+        ax.plot([min_value, max_value], [min_value, max_value])
+        ax.set_title("Actual vs Predicted Rating")
+        ax.set_xlabel("Actual Rating")
+        ax.set_ylabel("Predicted Rating")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print("실제 평점 vs 예측 평점 이미지 저장:", output_path)
+    except Exception as exc:
+        print(f"실제 평점 vs 예측 평점 이미지 저장 실패, 분석은 계속합니다: {exc}")
+        plt.close("all")
+
+
+def save_analysis_summary(
+    explained_variance_ratio: np.ndarray,
+    regression_result: dict,
+    arima_result: dict,
+) -> None:
+    lines = ["PCA Explained Variance Ratio:"]
+    if len(explained_variance_ratio) == 0:
+        lines.append("Skipped: PCA result is not available")
+    else:
+        for index, ratio in enumerate(explained_variance_ratio, start=1):
+            lines.append(f"PC{index}: {ratio:.6f}")
+
+    lines.append("")
+    lines.append("Linear Regression:")
+    if regression_result.get("skipped"):
+        lines.append(f"Skipped: {regression_result['skipped']}")
+    else:
+        lines.append(f"R2: {regression_result['r2']:.6f}")
+        lines.append(f"MSE: {regression_result['mse']:.6f}")
+
+    lines.append("")
+    lines.append("ARIMA:")
+    if arima_result.get("skipped"):
+        lines.append(f"Skipped: {arima_result['skipped']}")
+    else:
+        lines.append(f"Forecast: {arima_result['forecast']:.6f}")
+
+    SUMMARY_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("분석 요약 저장:", SUMMARY_PATH)
 
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     plt.close("all")
 
     try:
@@ -300,7 +428,7 @@ def main() -> None:
     df_scaled.to_csv(scaled_path, index=False, encoding="utf-8-sig")
     print("정규화된 데이터 저장:", scaled_path)
 
-    df_pca = run_pca(df_scaled)
+    df_pca, explained_variance_ratio = run_pca(df_scaled)
     pca_path = OUTPUT_DIR / "hms_movies_pca.csv"
     if df_pca.empty:
         print("PCA 결과가 없어 파일 저장을 건너뜁니다.")
@@ -308,9 +436,14 @@ def main() -> None:
         df_pca.to_csv(pca_path, index=False, encoding="utf-8-sig")
         print("PCA 결과 저장:", pca_path)
 
-    analyze_correlation(df_scaled)
-    run_arima_forecast(df_clean)
-    run_linear_regression(df_scaled, df_pca)
+    correlation_matrix = analyze_correlation(df_scaled)
+    arima_result = run_arima_forecast(df_clean)
+    regression_result = run_linear_regression(df_scaled, df_pca)
+
+    plot_pca_explained_variance(explained_variance_ratio)
+    plot_correlation_heatmap(correlation_matrix)
+    plot_actual_vs_predicted(regression_result)
+    save_analysis_summary(explained_variance_ratio, regression_result, arima_result)
 
 
 if __name__ == "__main__":

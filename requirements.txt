@@ -1,8 +1,8 @@
-numpy
-pandas
-requests
-beautifulsoup4
-scikit-learn
-statsmodels
-matplotlib
-jupyter
+numpy>=1.26
+pandas>=2.2
+requests>=2.31
+beautifulsoup4>=4.12
+scikit-learn>=1.4
+statsmodels>=0.14
+matplotlib>=3.8
+jupyter>=1.0

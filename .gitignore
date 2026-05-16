@@ -24,3 +24,4 @@ Thumbs.db
 # Generated analysis outputs
 outputs/*
 !outputs/.gitkeep
+!outputs/analysis_summary.txt

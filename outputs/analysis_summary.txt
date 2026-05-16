@@ -1,0 +1,12 @@
+PCA Explained Variance Ratio:
+PC1: 0.539531
+PC2: 0.276242
+PC3: 0.149280
+PC4: 0.034946
+
+Linear Regression:
+R2: 0.275227
+MSE: 0.057193
+
+ARIMA:
+Skipped: 월별 평점 데이터가 부족합니다. ARIMA 단계를 건너뜁니다.
