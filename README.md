@@ -35,7 +35,6 @@ Cine21 영화 데이터를 수집·전처리하고 PCA, 상관분석, ARIMA, 선
 ```text
 movie-pca-rating-analysis/
 ├── README.md
-├── GITHUB_UPLOAD_GUIDE.md
 ├── requirements.txt
 ├── .gitignore
 ├── data/
@@ -124,5 +123,4 @@ python src/hms_project_202212004.py
 
 ## 추가 메모
 
-- `GITHUB_UPLOAD_GUIDE.md`는 업로드 참고용 문서로 유지되어 있습니다.
 - 이 저장소의 분석 주제 및 원본 데이터(`data/hms202212004.csv`)는 보존되어야 합니다.
